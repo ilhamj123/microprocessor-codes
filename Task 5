@@ -188,7 +188,7 @@ void setup() {
   // 5A: spin in the assembly loop until the first button press is detected
   waitForFirstPress();
 
-  // Confirmation blink — 200 ms flash to signal that the press was registered
+  // Confirmation blink — 200 ms flash to signal that the press happened
   digitalWrite(LED_PIN, HIGH); delay(200);
   digitalWrite(LED_PIN, LOW);
 
@@ -197,7 +197,7 @@ void setup() {
 
   // 5B: jump permanently into the chosen mode using absolute JMP instructions.
   // These are not function calls , no return address is pushed.
-  // The mode entry functions never return, so JMP is the honest choice here.
+  // The mode entry functions never return, so JMP is the appropriate choice here.
   if (mode == 1)
     asm volatile("jmp modeA_entry");   // 1 press Mode A
   else if (mode == 2)
