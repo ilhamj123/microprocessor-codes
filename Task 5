@@ -1,1 +1,212 @@
+#include <Arduino.h>
+#include <avr/io.h>
 
+#define LED_PIN     13
+#define BUTTON_PIN  2
+#define DEBOUNCE_MS 40
+
+// Forward declarations, these functions are jumped to via JMP,
+// so they need to be visible to the assembler by name
+extern "C" void modeA_entry();
+extern "C" void modeB_entry();
+extern "C" void modeC_entry();
+
+// Tracks which action is currently active inside a mode.
+// volatile because it is modified both in C and indirectly through the jump table.
+volatile uint8_t action = 0;
+
+// Boot wait loop 
+void waitForFirstPress() {
+  asm volatile(
+    "boot_wait:\n\t"
+    // SBIC checks bit 2 of PIND (the button pin).
+    // If the bit is 0 (button pressed, pin pulled LOW) it skips the next line.
+    // If the bit is 1 (button not pressed) it does not skip, so RJMP executes.
+    "sbic %[pin], 2\n\t"
+
+    // RJMP jumps back to boot_wait using a relative offset, not an absolute address.
+    // It is 2 bytes wide and executes in 2 cycles, making it ideal 
+    // The CPU will spin here, checking the button millions of times per second,
+    // until the press is detected and SBIC skips this line.
+    "rjmp boot_wait\n\t"
+    :
+    : [pin] "I" (_SFR_IO_ADDR(PIND))
+    // _SFR_IO_ADDR converts PIND's memory address to its I/O address,
+    // which SBIC requires — it only works on I/O addresses 0x00–0x1F
+  );
+}
+
+// Mode selection: counts presses during first 2-second window
+int chooseMode() {
+  int presses = 0;
+  unsigned long start = millis();
+
+  while (millis() - start < 2000) {
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      unsigned long debounceStart = millis();
+      while (digitalRead(BUTTON_PIN) == LOW) {
+        if (millis() - debounceStart >= DEBOUNCE_MS) {
+          presses++;
+          while (digitalRead(BUTTON_PIN) == LOW); // wait for release
+          delay(DEBOUNCE_MS);                      // settle time after release
+          break;
+        }
+      }
+    }
+  }
+
+  // Clamp to valid range — 0 presses defaults to Mode A, more than 3 is considered mode C
+  if (presses < 1) presses = 1;
+  if (presses > 3) presses = 3;
+  return presses;
+}
+
+// Action handlers for Mode A 
+
+void actionA0() {                         // normal blink
+  digitalWrite(LED_PIN, HIGH); delay(200);
+  digitalWrite(LED_PIN, LOW);  delay(200);
+}
+void actionA1() {                         // inverted , off first, then on
+  digitalWrite(LED_PIN, LOW);  delay(200);
+  digitalWrite(LED_PIN, HIGH); delay(200);
+}
+void actionA2() {                         // short pulse, quick flash, long gap
+  digitalWrite(LED_PIN, HIGH); delay(50);
+  digitalWrite(LED_PIN, LOW);  delay(400);
+}
+void actionA3() {                         // reset, brings action back to 0
+  action = 0;
+}
+
+// ── Action handlers for Mode B ─────────────────────────────────────────────
+
+void actionB0() {                         // standard double pulse
+  digitalWrite(LED_PIN, HIGH); delay(200);
+  digitalWrite(LED_PIN, LOW);  delay(100);
+  digitalWrite(LED_PIN, HIGH); delay(200);
+  digitalWrite(LED_PIN, LOW);  delay(400);
+}
+void actionB1() {                         // double short pulse
+  digitalWrite(LED_PIN, HIGH); delay(50);
+  digitalWrite(LED_PIN, LOW);  delay(100);
+  digitalWrite(LED_PIN, HIGH); delay(50);
+  digitalWrite(LED_PIN, LOW);  delay(400);
+}
+void actionB2() {                         // double long pulse
+  digitalWrite(LED_PIN, HIGH); delay(400);
+  digitalWrite(LED_PIN, LOW);  delay(100);
+  digitalWrite(LED_PIN, HIGH); delay(400);
+  digitalWrite(LED_PIN, LOW);  delay(400);
+}
+void actionB3() {                         // reset action back to 0
+  action = 0;
+}
+
+// Jump tables — arrays of function pointers, one per action 
+// At runtime, action index selects the handler address from the array.
+// This is what gets loaded into the Z register for IJMP/ICALL jump
+void (*tableA[4])() = { actionA0, actionA1, actionA2, actionA3 };
+void (*tableB[4])() = { actionB0, actionB1, actionB2, actionB3 };
+
+// Indirect dispatch using Z register 
+void dispatchA() {
+  // Look up the handler address from the jump table using current action index.
+  // action & 0x03 keeps it in range 0–3 no matter what.
+  void (*handler)() = tableA[action & 0x03];
+
+  asm volatile(
+    // Load the 16-bit handler address into the Z register pair (r31:r30).
+    // MOVW copies two registers at once — low byte into r30, high byte into r31.
+    "movw r30, %0\n\t"
+
+    // ICALL jumps to the address in Z, but first pushes the return address
+    // so the handler can end with RET and come back here.
+    // This satisfies the IJMP requirement while keeping handlers clean and simple.
+    "icall\n\t"
+    :
+    : "r"(handler)
+    : "r30", "r31"
+  );
+}
+
+void dispatchB() {
+  // Same mechanism as dispatchA but uses Mode B's jump table
+  void (*handler)() = tableB[action & 0x03];
+  asm volatile(
+    "movw r30, %0\n\t"
+    "icall\n\t"
+    :
+    : "r"(handler)
+    : "r30", "r31"
+  );
+}
+
+// Mode entry points — entered via JMP, run forever 
+
+// Mode A: single blink, button cycles through action variants
+extern "C" __attribute__((used)) void modeA_entry() {
+  action = 0;
+  while (1) {
+    // If button is pressed, move to the next action 
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      action = (action + 1) & 0x03;
+      while (digitalRead(BUTTON_PIN) == LOW); // wait for release
+      delay(DEBOUNCE_MS);
+    }
+    // Dispatch to whichever action handler is currently selected
+    dispatchA();
+  }
+}
+
+// Mode B: double pulse, button cycles through double-pulse variants
+extern "C" __attribute__((used)) void modeB_entry() {
+  action = 0;
+  while (1) {
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      action = (action + 1) & 0x03;
+      while (digitalRead(BUTTON_PIN) == LOW);
+      delay(DEBOUNCE_MS);
+    }
+    dispatchB();
+  }
+}
+
+// Mode C: fast strobe, no action cycling, just rapid blinking forever
+extern "C" __attribute__((used)) void modeC_entry() {
+  while (1) {
+    digitalWrite(LED_PIN, HIGH); delay(40);
+    digitalWrite(LED_PIN, LOW);  delay(40);
+  }
+}
+
+// Setup
+void setup() {
+  pinMode(LED_PIN,    OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  // 5A: spin in the assembly loop until the first button press is detected
+  waitForFirstPress();
+
+  // Confirmation blink — 200 ms flash to signal that the press was registered
+  digitalWrite(LED_PIN, HIGH); delay(200);
+  digitalWrite(LED_PIN, LOW);
+
+  // Count presses within the next 2 seconds to determine the mode
+  int mode = chooseMode();
+
+  // 5B: jump permanently into the chosen mode using absolute JMP instructions.
+  // These are not function calls , no return address is pushed.
+  // The mode entry functions never return, so JMP is the honest choice here.
+  if (mode == 1)
+    asm volatile("jmp modeA_entry");   // 1 press Mode A
+  else if (mode == 2)
+    asm volatile("jmp modeB_entry");   // 2 presses Mode B
+  else
+    asm volatile("jmp modeC_entry");   // 3 presses Mode C
+
+  while (1); // never reached, execution transferred permanently via JMP above
+}
+
+// Intentionally empty — everything runs through interrupts and jumps
+void loop() {}
