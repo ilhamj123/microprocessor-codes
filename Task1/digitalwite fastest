@@ -1,1 +1,12 @@
+void setup() {
+  // Same as before , pin 13 set as output
+  pinMode(13, OUTPUT);
+}
 
+void loop() {
+  // Toggle the LED as fast as possible using digitalWrite.
+  // No delays 
+  
+  digitalWrite(13, HIGH);
+  digitalWrite(13, LOW);
+}
