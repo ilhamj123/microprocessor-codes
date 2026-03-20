@@ -85,7 +85,7 @@ void loop() {
   }
 
   // Wait 1 second before the next increment.
-  // During this time the CPU is busy-waiting inside delay() —
+  // During delay CPU is busy-waiting
   // roughly 16 million cycles spent doing nothing useful.
   delay(1000);
 }
