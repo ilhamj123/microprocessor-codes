@@ -1,1 +1,13 @@
+void setup() {
+  // Set PB5 (pin 13) as output, same as before
+  DDRB |= (1 << DDB5);
+}
 
+void loop() {
+  // Writing a 1 to a bit in PINB toggles the corresponding bit.
+  // This is a hardware feature of the ATmega328P, not a normal read.
+  // The toggle happens in a single cycles so it is fastest
+
+ 
+  PINB |= (1 << PINB5);
+}
