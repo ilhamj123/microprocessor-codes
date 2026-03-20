@@ -1,1 +1,98 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
 
+#define PULSE_PIN  PB5   // onboard LED, pin 13
+#define BUTTON_BIT PD2   // button connected to pin D2
+
+// Shared between two ISRs must be volatile so the compiler
+// always reads the real value from memory, no optimization.
+volatile uint8_t countdown = 0;
+
+// External Interrupt ISR, executed when the button is pressed 
+ISR(INT0_vect) {
+  // Set the output pin HIGH immediately, start of the pulse.
+  // ISR latency is only a few CPU cycles, so the response is fast.
+  PORTB |= (1 << PULSE_PIN);
+
+  // Load the countdown with 10, cause we want 10 timer ticks of 1 ms each = 10 ms
+  countdown = 10;
+
+  // Reset the timer counter to 0 so the first tick is a full 1 ms away.
+  // Without this, if the timer was mid-count when the button was pressed,
+  // the first tick would arrive early and the pulse would be slightly short.
+  TCNT1 = 0;
+
+  // Enable the Timer1 compare match interrupt to start the countdown.
+  // We only run the timer interrupt while a pulse is active, would be meaningless
+  // executing it every 1 ms when there is nothing to count down.
+  TIMSK1 |= (1 << OCIE1A);
+}
+
+// Timer1 Compare Match ISR, executes every 1 ms 
+ISR(TIMER1_COMPA_vect) {
+  if (countdown > 0) {
+    countdown--;
+
+    // When countdown hits zero, the 10 ms are up, so turn the pin off
+    // and disable this interrupt so it stops firing until the next button press.
+    if (countdown == 0) {
+      PORTB &= ~(1 << PULSE_PIN);
+      TIMSK1 &= ~(1 << OCIE1A);
+    }
+  }
+}
+
+void setup() {
+  // Output pin setup
+  // Set PB5 as output and make sure it starts LOW
+  DDRB  |=  (1 << PULSE_PIN);
+  PORTB &= ~(1 << PULSE_PIN);
+
+  // Button pin setup 
+  // Set PD2 as input, then enable the internal pull-up resistor.
+  // The pull-up holds the pin HIGH when the button is not pressed.
+  // Pressing the button connects it to GND, pulling the pin LOW.
+  DDRD  &= ~(1 << BUTTON_BIT);
+  PORTD |=  (1 << BUTTON_BIT);
+
+  //External interrupt configuration (INT0 on D2)
+  // ISC01=1, ISC00=0 configures INT0 to trigger on a falling edge
+  // exactly the HIGH to LOW transition that happens when the button is pressed.
+  EICRA &= ~(1 << ISC00);
+  EICRA |=  (1 << ISC01);
+
+  // Enable INT0 in the interrupt mask register
+  EIMSK |= (1 << INT0);
+
+  // Timer1 configuration
+  // Clear both control registers before configuring, avoids leftover bits
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1  = 0;
+
+  // Set OCR1A to 249 — this is the compare value that produces a 1 ms interrupt.
+  // Calculation: f_timer = 16MHz / 64 = 250,000 Hz
+  // Ticks per 1ms = 250,000 × 0.001 = 250 ticks
+  // OCR1A = 250 - 1 = 249  (timer counts 0 to 249 = 250 steps, then resets)
+  OCR1A = 249;
+
+  // Enable CTC mode via WGM12 bit.
+  // In CTC mode, the timer resets to 0 automatically when it reaches OCR1A,
+  // giving us a perfectly repeating 1 ms interval.
+  TCCR1B |= (1 << WGM12);
+
+  // Enable the Timer1 compare match interrupt
+  TIMSK1 |= (1 << OCIE1A);
+
+  // Set prescaler to 64 by setting CS11 and CS10 both to 1.
+  // This divides the 16 MHz clock down to 250 kHz for the timer.
+  TCCR1B |= (1 << CS11) | (1 << CS10);
+
+  // Enable global interrupts , nothing execute until this line.
+  // All hardware must be fully configured before calling this.
+  sei();
+}
+
+// Main loop is intentionally empty.
+// All behaviour is handled entirely by the two ISRs above.
+void loop() {}
