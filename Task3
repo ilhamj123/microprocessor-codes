@@ -1,1 +1,91 @@
+#include <Arduino.h>
+#include <avr/io.h>
 
+// volatile tells the compiler this variable can change
+// never optimize, always read
+// it from its actual SRAM memory location.
+volatile uint8_t counter = 0;
+
+void setup() {
+  Serial.begin(9600);
+
+  // Before touching EEPROM, check if a write is still in progress.
+  // EEPE stays set while the hardware is busy, we must wait it out.
+  while (EECR & (1 << EEPE));
+
+  // Point to EEPROM address 0x00 this is where we always store the counter.
+  // We picked address 0 arbitrarily; any address from 0x000 to 0x3FF would work. Gotta be consistent
+  EEAR = 0x00;
+
+  // Trigger the read by setting the EERE bit.
+  // The EEPROM controller fetches the byte at EEAR and puts it in EEDR
+  // within 4 clock cycles . no busy wait needed after a read.
+  EECR |= (1 << EERE);
+
+  // Copy the read byte into counter so we continue from the last saved value.
+  
+  counter = EEDR;
+}
+
+void loop() {
+
+  // Increment the counter using three AVR assembly instructions.
+  // We do this in assembly to stay at the register level as required.
+  asm volatile(
+    "lds r24, counter  \n\t"  // load counter from its SRAM address into r24
+    "inc r24           \n\t"  // add 1 to r24 in the ALU (1 cycle)
+    "sts counter, r24  \n\t"  // write the new value back to SRAM
+  );
+  // Note: LDS and STS each take 2 cycles, INC takes 1, 5 cycles total
+
+  // Print the current counter value to the serial monitor
+  Serial.print("Counter = ");
+  Serial.println(counter);
+
+  // Check if the user has sent a command over serial
+  if (Serial.available()) {
+    char command = Serial.read();
+
+    if (command == 'S') {
+      //  Save counter to EEPROM
+
+      // Wait for any previous write to finish before starting a new one
+      while (EECR & (1 << EEPE));
+
+      EEAR = 0x00;       // target address: byte 0
+      EEDR = counter;    // load the value we want to write into the data register
+
+      // The write sequence is a strict two-step process required by the hardware.
+      // Setting EEMPE first arms the write — it acts as a safety interlock.
+      // EEPE must then be set within 4 clock cycles or the write is rejected.
+      // This prevents accidental writes from corrupting EEPROM.
+      EECR |= (1 << EEMPE);  // step 1: master write enable
+      EECR |= (1 << EEPE);   // step 2: trigger the write
+
+      Serial.println("Value stored in EEPROM.");
+    }
+
+    if (command == 'R') {
+      // Reset counter and clear EEPROM
+
+      // Reset the in-memory counter immediately so serial output reflects 0
+      counter = 0;
+
+      // Also write 0 to EEPROM so the next power-up starts from 0 too.
+      // Without this, resetting memory but not EEPROM would restore the
+      // old value on the next power cycle.
+      while (EECR & (1 << EEPE));
+      EEAR = 0x00;
+      EEDR = 0;
+      EECR |= (1 << EEMPE);
+      EECR |= (1 << EEPE);
+
+      Serial.println("Counter reset.");
+    }
+  }
+
+  // Wait 1 second before the next increment.
+  // During this time the CPU is busy-waiting inside delay() —
+  // roughly 16 million cycles spent doing nothing useful.
+  delay(1000);
+}
