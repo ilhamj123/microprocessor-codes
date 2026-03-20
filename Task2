@@ -1,1 +1,58 @@
+// uint8_t = unsigned 8-bit integer (0–255), which matches the ATmega328P's
+// native register size. Each variable maps directly to a single CPU register.
+// A and B are inputs, R stores the subtraction result, S stores the SREG snapshot.
+uint8_t A, B;
+uint8_t R, S;
 
+void setup() {
+  // Start serial communication at 9600 baud for input/output with the PC
+  Serial.begin(9600);
+}
+
+void loop() {
+  // Do nothing until the user sends data
+  if (!Serial.available()) return;
+
+  // Read the two numbers the user typed
+  A = Serial.parseInt();
+  B = Serial.parseInt();
+
+  // get rid off any leftover characters so no bug for the next cycle
+  while (Serial.available()) Serial.read();
+
+  // We use inline assembly for two reasons:
+  // 1. We need the subtraction to happen in specific registers
+  // 2. We must capture SREG in the very next instruction after SUB —
+  //    any C code in between would overwrite the flags before we read them
+  asm volatile(
+    "mov r20, %[a]\n"      // copy A into r20 
+    "mov r21, %[b]\n"      // copy B into r21
+    "sub r20, r21\n"       // r20 = A - B. SREG updated by ALU
+    "in  r22, __SREG__\n"  // read SREG into r22 immediately after SUB with nothing in between
+    "mov %[r], r20\n"      // copy the result back to C variable R
+    "mov %[s], r22\n"      //  captured SREG back to C variable S
+
+    : [r] "=r" (R), [s] "=r" (S)   // output operands, written by assembly
+    : [a] "r" (A), [b] "r" (B)     // input operands, C loads these into registers before assembly runs
+    : "r20", "r21", "r22"           // clobber list tells compiler not to use these registers for anything else
+  );
+
+  // Print both inputs and the subtraction result
+  Serial.print(" A="); Serial.print(A);
+  Serial.print(" B="); Serial.print(B);
+  Serial.print(" R="); Serial.print(R);  // may wrap around if B > A (e.g. 5-10 = 251)
+
+  // Z flag atbit 1 of SREG , shift right by 1, mask to get just that bit
+  // Z = 1 means the result was exactly zero (A == B)
+  Serial.print(" Z="); Serial.print((S >> 1) & 1);
+
+  // C flag  at bit 0 of SREG  mask directly
+  // C = 1 means B > A, a borrow occurred, unsigned underflow happened
+  Serial.print(" C="); Serial.println(S & 1);
+
+  // Print the full SREG byte in binary from bit 7 down to bit 0
+  // This gives all status flags after the subtraction
+  Serial.print(" SREG=");
+  for (int i = 7; i >= 0; i--) Serial.print((S >> i) & 1);
+  Serial.println();
+}
