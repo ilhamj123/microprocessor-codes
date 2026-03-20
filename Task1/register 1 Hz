@@ -1,1 +1,24 @@
+void setup() {
+  // Data Direction Register for Port B(input or output).
+  // Setting bit 5 to 1 to make PB5 an output pin.
+  // We use OR with bit mask so we only bit 5 change
+  // other  bits of DDRB not changed.
+  DDRB |= (1 << DDB5);
+}
 
+void loop() {
+  // Set bit 5 of PORTB to 1 to turn the LED ON.
+  // Again using OR with bit mask so only this bit changes.
+  PORTB |= (1 << PORTB5);
+ 
+  // Wait 500 ms
+  delay(500);
+  
+  // Clear bit 5 of PORTB to 0, LED turns OFF.
+  // ~(1 << PORTB5) creates an inverted mask: 11011111
+  // AND-ing this into PORTB clears bit 5, everything else unchanged.
+  PORTB &= ~(1 << PORTB5);
+  
+  // Wait another 500 ms for 1Hz requirement
+  delay(500);
+}
