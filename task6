@@ -1,1 +1,62 @@
+#define F_CPU 16000000UL          // System clock speed for timer calculations set to 16MHz
+#include <avr/io.h>               // input output registers  
+#include <avr/interrupt.h>   // for interrupts 
 
+volatile uint8_t digit = 0;       // Current digit from 0 to 9, updated in interrupt
+volatile uint8_t paused = 0;      // Pause flag if 0 running, 1 paused
+
+const uint8_t seg[10] = {         // 7‑segment patterns for common‑cathode display
+    0x3F, // 0: a,b,c,d,e,f
+    0x06, // 1: b,c
+    0x5B, // 2: a,b,d,e,g
+    0x4F, // 3: a,b,c,d,g
+    0x66, // 4: b,c,f,g
+    0x6D, // 5: a,c,d,f,g
+    0x7D, // 6: a,c,d,e,f,g
+    0x07, // 7: a,b,c
+    0x7F, // 8: all segments
+    0x6F  // 9: a,b,c,d,f,g
+};
+
+static inline void show_digit(uint8_t n) {
+    uint8_t x = seg[n];                // Fetch pattern for digit n
+    PORTB = (PORTB & ~0x3F) | (x & 0x3F);   // segments a–f is in PB0–PB5
+    PORTC = (PORTC & ~0x01) | ((x >> 6) & 1); // segment g in PC0
+}
+
+ISR(TIMER1_COMPA_vect) {              // Timer1 match interrupt fires every 0.5 s
+    if (!paused) {                    // Only advance if paused = 0
+        digit = (digit + 1) % 10;     // Wrap 0 after 9
+        show_digit(digit);            // Update the display immediately without delays
+    }
+}
+
+ISR(INT0_vect) {                      // External interrupt on PD2, fires falling edge
+    paused ^= 1;                      // Toggle pause state on each button press, 1 to 0, 0 to 1
+}
+
+int main(void) {
+    DDRB |= 0x3F;                     // Set PB0 to PB5 as outputs (segments a–f)
+    DDRC |= (1 << PC0);               // Set PC0 as output for segment g
+    DDRD &= ~(1 << PD2);              // Set PD2 as input external interrupt on button
+    PORTD |= (1 << PD2);              // Enable internal pull‑up on PD2 for button
+
+    show_digit(digit);                // Show initial digit 0
+
+    // Configure Timer1 for CTC mode, 0.5 s interval
+    TCCR1A = 0;                       // CTC mode
+    TCCR1B = (1 << WGM12) | (1 << CS12); // CTC mode (WGM12), prescaler 256
+    OCR1A  = 31249;                   // (16000000 / 256) * 0.5 – 1 = 31249
+
+    TIMSK1 = (1 << OCIE1A);           // Enable Timer1 compare A interrupt
+
+    // Configure INT0 for falling‑edge trigger
+    EICRA = (1 << ISC01);             // Falling edge on INT0 when (ISC01=1, ISC00=0)
+    EIMSK = (1 << INT0);              // Enable INT0 interrupt
+
+    sei();                            // Enable global interrupts
+
+    while (1) { }                     // Everything is interrupt‑driven
+
+
+}
