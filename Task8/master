@@ -1,1 +1,74 @@
+#define F_CPU 16000000UL          // frequency 16 MHz
+#define SLAVE_ADDR 0x08           // I2C address of the slave device
 
+/* PROTOCOL VALUES:                // Command values used for master-slave communication
+    0x00 - do nothing            // Slave does nothing
+    0x01 - send                  // Master tells slave it is about to send data
+    0x02 - receive               // Slave indicates it is sending data back
+*/
+
+#include <avr/io.h>               // input output
+#include <util/delay.h>           // Delay functions 
+#include <stdbool.h>              // Standard boolean types
+
+void TWI_start() {
+    TWCR = (1 << TWINT) | (1 << TWSTA) | (1 << TWEN); // Send START condition on the bus
+    while (!(TWCR & (1 << TWINT))); // Wait until START has been transmitted
+}
+
+void TWI_stop() {
+    TWCR = (1 << TWINT) | (1 << TWSTO) | (1 << TWEN); // Send STOP condition on the bus
+}
+
+void TWI_write(uint8_t data) {
+    TWDR = data; // Load the byte to be transmitted into the TWDR
+    TWCR = (1 << TWINT) | (1 << TWEN); // Clear interrupt flag then start transmission
+    while (!(TWCR & (1 << TWINT))); // Wait for the byte to be sent (slave ACKs automatically)
+}
+
+uint8_t TWI_read_nack() {
+    TWCR = (1 << TWINT) | (1 << TWEN); // Start receiving a byte, master will NACK after (TWEA=0)
+    while (!(TWCR & (1 << TWINT))); // Wait for the byte to be received
+    return TWDR; // Return the received byte
+}
+
+void send_to_slave(uint8_t data) {
+    TWI_start(); // start condition
+    TWI_write((SLAVE_ADDR << 1) | 0); // Send slave address with write flag 
+    TWI_write(data); // Send the data byte
+    TWI_stop(); // stop condition
+}
+
+uint8_t request_from_slave() {
+    uint8_t data;
+    TWI_start(); // start
+    TWI_write((SLAVE_ADDR << 1) | 1); // Send slave address with read flag 
+    data = TWI_read_nack(); // Read one byte from the slave and send NACK to end
+    TWI_stop(); // stop
+    return data; // Return the byte received from the slave
+}
+
+void setup() {
+    TWSR = 0x00; // prescaler = 1
+    TWBR = 72; // With prescaler=1, SCL frequency = 100 kHz (formula: TWBR = (F_CPU/SCL - 16) / (2* prescaler))
+    TWCR = (1 << TWEN); // Enable TWI 
+    PORTC |= (1 << PC4) | (1 << PC5); // Enable internal pull-ups on SDA and SCL 
+    DDRB |= (1 << PB5); // on‑board LED(PB5) as output
+    DDRD &= ~(1 << PD2); // Set PD2 as input (button)
+    PORTD |= (1 << PD2); // Enable internal pull‑up on PD2 
+}
+
+void loop() {
+    if (!(PIND & (1 << PD2))) { // If button is pressed 
+        send_to_slave(0x01); // Send command 0x01 to slave
+    } else {
+        send_to_slave(0x00); // Otherwise send command 0x00 (do nothing)
+    }
+    uint8_t received = request_from_slave(); // Request a byte from the slave
+    if (received == 0x02) { // If slave responded with 0x02
+        PORTB |= (1 << PB5); // Turn on the LED 
+    } else {
+        PORTB &= ~(1 << PB5); // Turn off the LED 
+    }
+    _delay_ms(10); // Wait 10 ms before repeating
+}
