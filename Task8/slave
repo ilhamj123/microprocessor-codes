@@ -1,1 +1,43 @@
+#define F_CPU 16000000UL              // clock speed 16000000 Hz
+#include <avr/io.h>                   // input output
 
+#define SLAVE_ADDR 0x08               // I2C slave address 
+
+volatile uint8_t state = 0x00;        // Holds current state to return when master reads 0x00 or 0x02
+
+void setup() {
+  TWAR = (SLAVE_ADDR << 1);           // Load slave address into TWAR, shift left 1 bit (LSB is general call enable, left 0)
+  TWCR = (1 << TWEN) | (1 << TWEA) | (1 << TWINT); // Enable TWI, send ACK after own address, clear interrupt flag
+  PORTC |= (1 << PC4) | (1 << PC5);   // Enable internal pull‑ups on SDA  and SCL 
+  DDRB |= (1 << PB5);                 // Set PB5 (onboard LED) as output
+  DDRD &= ~(1 << PD2);                // Set PD2 as input for button
+  PORTD |= (1 << PD2);                // Enable internal pull‑up on PD2 
+}
+
+void loop() {
+  if (!(PIND & (1 << PD2))) {         // If button is pressed (PD2 reads low)
+    state = 0x02;                     // Update state to 0x02 indicating button pressed
+  }
+
+  if (TWCR & (1 << TWINT)) {          // Check if a TWI interrupt flag has been raised
+    uint8_t status = TWSR & 0b11111000; // Extract TWI status bits 
+
+    if (status == 0x60) {             // Status: own SLA+W has been received, ACK returned
+      TWCR = (1 << TWEN) | (1 << TWEA) | (1 << TWINT); // Clear flag, keep enabled, ACK next byte
+    } else if (status == 0x80) {      // Status: data byte received after own SLA+W, ACK returned
+      uint8_t received = TWDR;        // Read the received data byte 
+      if (received == 0x01) {         // If master sent command 0x01
+        PORTB |= (1 << PB5);          // LED on
+      } else {                        // any other command
+        PORTB &= ~(1 << PB5);         // LED off
+      }
+      TWCR = (1 << TWEN) | (1 << TWEA) | (1 << TWINT); // Acknowledge and continue
+    } else if (status == 0xA8) {      // Status: own SLA+R received, ACK returned (master will now read)
+      TWDR = state;                   // Load the current state byte into data register for master to read
+      TWCR = (1 << TWEN) | (1 << TWEA) | (1 << TWINT); // Clear flag and prepare for next operation
+      state = (!(PIND & (1 << PD2))) ? 0x02 : 0x00; // Immediately update state based on button (post‑read reset)
+    } else {                          // Any other TWI status 
+      TWCR = (1 << TWEN) | (1 << TWEA) | (1 << TWINT); // Keep TWI alive, send ACK and clear flag
+    }
+  }
+}
