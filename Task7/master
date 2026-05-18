@@ -1,1 +1,37 @@
+// Master Code – SPI transmitter that repeatedly sends the sequence 85, 170, 255
+#include <avr/io.h>              // input output registers 
+#include <util/delay.h>          // Delay functions 
 
+uint8_t dataSequence[3] = {85, 170, 255}; // Sequence of bytes to transmit
+uint8_t indexTx = 0;                      // Current index in the sequence
+
+void SPI_MasterInit() {
+  DDRB |= (1 << PB2) | (1 << PB3) | (1 << PB5); // Set SS, MOSI, SCK as outputs for master
+  DDRB &= ~(1 << PB4);                           // Set MISO as input for master
+  PORTB |= (1 << PB2);                           // Pull SS high (slave is not selected)
+  SPCR = (1 << SPE) | (1 << MSTR) | (1 << SPR1) | (1 << SPR1); // SPI enabled, this device is master, clock = fosc/128
+}
+
+uint8_t SPI_MasterTransmit(uint8_t data) {
+  PORTB &= ~(1 << PB2);             // Pulling SS low to select the slave
+  SPDR = data;                      // Load the byte into the SPDR
+  while (!(SPSR & (1 << SPIF))) {   // Wait until the transmission is completed
+  }
+  uint8_t received = SPDR;          // Read the received byte 
+  PORTB |= (1 << PB2);              // Pull SS high to deselect the slave
+  return received;                  // Return the byte that received from the slave
+}
+
+void setup() {
+  SPI_MasterInit();                // Initialize SPI as master
+}
+
+void loop() {
+  SPI_MasterTransmit(dataSequence[indexTx]); // Send the byte in current index
+
+  indexTx++;                        // Move to the next index
+  if (indexTx >= 3) {               // If the index is out of range 
+    indexTx = 0;                    // back to first byte
+  }
+
+  _delay_ms(1000);                  // Wait 1000 ms
