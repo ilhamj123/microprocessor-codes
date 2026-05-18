@@ -1,1 +1,23 @@
+// Slave Code – SPI slave that shows transmitted bytes over Serial and always sends 60 back
+#include <avr/io.h>             // input output
+#include <Arduino.h>            // Serial, setup/loop
 
+void SPI_SlaveInit() {
+  DDRB |= (1 << PB4);           // Set MISO as output
+  DDRB &= ~((1 << PB2) | (1 << PB3) | (1 << PB5)); // Set SS, MOSI, SCK as inputs
+  SPCR = (1 << SPE);            // Enable SPI in slave mode
+  SPDR = 60;                    // Preload the SPDR with 60 (first reply)
+}
+
+void setup() {
+  Serial.begin(9600);           // Start serial communication at 9600 baud rate
+  SPI_SlaveInit();              // Initialize SPI slave hardware
+}
+
+void loop() {
+  if (SPSR & (1 << SPIF)) {     // Check SPIF flag set
+    uint8_t received = SPDR;    // Read the received byte  to clear SPIF automatically
+    Serial.println(received);   // show received byte in Serial Monitor
+  }
+  SPDR = 60;                    // Always prepare 60 as the next byte to send to the master
+}
